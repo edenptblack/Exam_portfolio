@@ -1,0 +1,514 @@
+---
+title: "R exam excerpt - AML transcriptomics"
+author: 'Eden Black'
+output:
+  html_document:
+    df_print: paged
+    theme:
+      bootswatch: darkly
+---
+
+# Question 5
+### Tables GSE9476_series_matrix.txt (tab-delimited) and  GSE9476_meta_info.txt are the microarray gene expression dataset and sample information table about patients with Acute Myeloid Leukemia (AML) and normal subjects as Controls. The expression data have been log2 transformed. 
+
+```{r}
+library(tidyverse)
+
+# Read in datasets
+AML_data = read.csv('data/GSE9476_series_matrix.txt',
+                    header = TRUE,
+                    sep = '\t',
+                    fill = TRUE,
+                    comment.char = '!')
+
+AML_metadata = read.csv('data/GSE9476_meta_info.txt',
+                        header = TRUE,
+                        sep = '\t',
+                        fill = TRUE)
+
+# Convert metadata sample IDs and disease status to factors for later analysis
+AML_metadata$SampleID = as.factor(AML_metadata$SampleID)
+AML_metadata$Disease_status = as.factor(AML_metadata$Disease_status)
+```
+
+
+### Please complete the following tasks:
+
+### 1/ How many patients are with AML and how many are the control cases? How many genes(probesets) are we studying?  
+
+The size and structure of the AML_metadata dataframe are checked before use
+
+```{r}
+str(AML_metadata)
+dim(AML_metadata)
+```
+
+
+The number of cases vs controls is calculated by counting the number of samples which are AML and Control in the metadata. This is possible as Disease_status was previously converted to a factor.
+
+```{r}
+disease_status_counts = AML_metadata %>%
+  group_by(Disease_status) %>%
+  summarise(disease_status_count = n())
+
+print(disease_status_counts)
+```
+
+Each probeset is one row in the AML_data table, so counting the number of rows gives the number of probesets.
+
+```{r}
+probeset_number = nrow(AML_data) 
+
+paste('There are', probeset_number, 'probesets in the dataset')
+```
+
+### 2/ Create your R function to calculate the average age of AML patients and Control subjects separately. Check your results by using R mean function.
+
+This function splits the metadata into AML and Control cases and then divides the sum of ages by the total number of cases (found by counting the rows) to give the mean.
+
+```{r}
+disease_status_mean_ages = function(data) {
+  # Select AML cases
+  AML_table = data %>%
+    filter(Disease_status == 'AML')
+  
+  #Select control cases
+  control_table = data %>%
+    filter(Disease_status == 'Control')
+  
+  # Calculate mean ages in each disease state
+  AML_mean_age = paste('Mean AML age =',
+                       sum(AML_table$Age)/nrow(AML_table))
+  control_mean_age = paste('Mean control age =',
+                           sum(control_table$Age/nrow(control_table)))
+  outputs = c(AML_mean_age, control_mean_age)
+  
+  return(outputs)
+}
+```
+
+##### Answer:
+
+As Age is the only column in the metadata with missing values, drop_na() is used to remove all rows containing NA values to prevent an unrepresentatively low mean value.
+
+```{r}
+disease_status_mean_ages(drop_na(AML_metadata))
+```
+
+This result can be compared to the output of the R mean() function to show that it is correct.
+
+```{r}
+AML_metadata %>%
+  group_by(Disease_status) %>%
+  summarise(mean_age = mean(Age, na.rm = TRUE))
+```
+
+
+### 3/ Is there any significant difference between sample ages of AMLs and Controls? Assume the age follows a normal distribution.
+
+To check for a significant difference between two normally-distributed independent variables where either variable could be higher or lower, a two-tailed unpaired t-test is used.
+
+```{r}
+AML_diseased_metadata = AML_metadata %>%
+  filter(Disease_status == 'AML')
+
+AML_control_metadata = AML_metadata %>%
+  filter(Disease_status == 'Control')
+
+t.test(AML_diseased_metadata$Age,
+       AML_control_metadata$Age,
+       na.rm = TRUE) # Remove NA results from ages before running T-test
+```
+
+With a p-value of < 0.05, there is a high degree of confidence that there is a significant difference between the sample ages of AML and Control samples in this dataset.
+
+
+### 4/ Make a boxplot of gene expression for all the samples, marking data points in red for AML samples and blue for Control samples.   
+
+The AML_data dataframe is checked for N/A values before use.
+
+```{r}
+sum(is.na(AML_data))
+```
+
+AML_data is then tidied by pivoting into a long format. The probesets (ID_REF) and samples (SampleID) are converted to factors for later analysis. Structure is checked.
+
+```{r}
+# Tidy gene expression data by pivoting it into long format
+AML_data_long = pivot_longer(
+  data = AML_data,
+  cols = GSM239170:GSM240509, # Exclude probe ID
+  names_to = 'SampleID', # Match col name in metadata for easier joining
+  values_to = 'Expression'
+)
+
+# Convert to factors for later analysis
+AML_data_long$ID_REF = as.factor(AML_data_long$ID_REF)
+AML_data_long$SampleID = as.factor(AML_data_long$SampleID)
+
+str(AML_data_long)
+```
+
+To classify each sample as AML or Control, the expression data needs to be joined with the metadata. The metadata is trimmed to only SampleID (for joining) and Disease_status and then joined with the expression data. The data is checked for structure and missing values.
+
+```{r}
+# Trim metadata to only SampleID (for join) and disease status
+metadata_for_join = AML_metadata %>%
+  select(SampleID, Disease_status)
+
+# Join disease status from metadata to tidy gene expression data
+AML_data_with_status = AML_data_long %>%
+  left_join(metadata_for_join, by = 'SampleID')
+
+str(AML_data_with_status)
+sum(is.na(AML_data_with_status))
+```
+
+Finally, a boxplot is created using ggplot2. Scale_x_discrete is used to align the SampleID labels correctly with the chart, as they are misaligned when the graph is generated without this function. Figure width and height are specified in the RMarkdown code header.
+
+```{r, fig.width = 10, fig.height = 5}
+ggplot(data = AML_data_with_status, aes(SampleID, Expression)) +
+  geom_boxplot(aes(color = Disease_status, alpha = 0.6)) +
+  scale_color_manual(values = c('AML' = 'red', 'Control' = 'blue')) +
+  labs(title = 'Gene expression in AML and healthy samples',
+       y = 'log2 Gene Expression',
+       x = 'Sample ID',
+       color = 'Disease Status') +
+  scale_x_discrete(guide = guide_axis(angle = 90)) # Align x axis labels
+```
+
+
+### 5/ Create a table to include mean_AML, sd_AML, min_AML, max_AML, mean_Control, sd_Control, min_Control, max_Control, and Fold_change (i.e, mean_AML – mean_Control) for each gene. It is fine to use built-in functions. 
+
+Separate dataframes were created for AML and Control cases, each derived from the AML_data_with_status dataframe created in the previous question. Both were grouped by probeset (ID_REF) to calculate summary statistics for each gene across all samples in the relevant disease status.
+
+```{r}
+# Summarise AML data
+
+AML_data_summary_stats = AML_data_with_status %>%
+  filter(Disease_status == 'AML') %>%
+  group_by(ID_REF) %>%
+  summarise(mean_AML = mean(Expression),
+            sd_AML = sd(Expression),
+            min_AML = min(Expression),
+            max_AML = max(Expression))
+
+head(AML_data_summary_stats)
+```
+
+```{r}
+# Summarise control data
+
+control_data_summary_stats = AML_data_with_status %>%
+  filter(Disease_status == 'Control') %>%
+  group_by(ID_REF) %>%
+  summarise(mean_Control = mean(Expression),
+            sd_Control = sd(Expression),
+            min_Control = min(Expression),
+            max_Control = max(Expression))
+
+head(control_data_summary_stats)
+```
+
+These tables were then combined using a full join. log2 fold change was calculated by subtracting mean expression in control cases from mean expression in AML cases. The resulting table was checked for structure and missing values.
+
+```{r}
+# Join tables to create full summary stats for each gene
+full_data_summary_stats = AML_data_summary_stats %>%
+  full_join(control_data_summary_stats, by = 'ID_REF')
+
+# Add column for fold change (mean_AML - mean_control)
+full_data_summary_stats = full_data_summary_stats %>%
+  mutate(Fold_change = mean_AML - mean_Control)
+
+str(full_data_summary_stats)
+sum(is.na(full_data_summary_stats))
+```
+
+
+### 6/ With the table created above, make a scatterplot of the mean expression of AML vs. Control samples. Are mean_AML and mean_Control significantly different? 
+
+```{r}
+# Create scatter plot
+ggplot(full_data_summary_stats, aes(mean_Control, mean_AML)) +
+  geom_point(alpha = 0.4) +
+  labs(title = 'Mean expression of genes in AML vs control samples',
+       x = 'Mean log2 gene expression in control samples',
+       y = 'Mean log2 gene expression in AML samples')
+```
+
+The scatter plot above shows that the relationship between the expression of each gene in AML and control samples is highly linear, with the majority of genes clustered tightly around an y = x trendline. Those genes which stray far from this line are the ones we would be interested in analysing as potential DEGs. 
+
+A significant difference in overall gene expression between AML and control cases can be tested for using a t-test.
+
+```{r}
+# T-test for difference in overall mean gene expression in AML vs control
+t.test(full_data_summary_stats$mean_AML,
+       full_data_summary_stats$mean_Control)
+```
+Unsurprisingly, overall gene expression is not significantly shifted either up or down and the null hypothesis is accepted. Of far more interest is the change in expression of individual genes.
+
+
+### 7/ For each gene/probeset, conduct t-test between AML samples and Control samples, and then create a table including t scores and p-values from t-test, and merge to the table created in 6.  
+
+To perform a t-test of expression by disease status on each gene, the AML_data_with_status dataframe was grouped by probeset (ID_REF). New columns were added using the mutate function for t-score and p-value, and the relevent results from the t.test() function were extracted into those columns.
+
+```{r}
+t_test_table = AML_data_with_status %>%
+  group_by(ID_REF) %>%
+  mutate(t_score = t.test(Expression ~ Disease_status)$statistic, # Extract t-score into column
+         p_value = t.test(Expression ~ Disease_status)$p.value) # Extract p-value into column
+```
+
+The resulting table was then full joined with the summary statistics table from question 5. The resulting table was checked for structure and missing values.
+
+```{r}
+full_data_with_t_test = t_test_table %>%
+  select(ID_REF, t_score, p_value) %>%
+  group_by(ID_REF) %>%
+  full_join(full_data_summary_stats, by = 'ID_REF') %>%
+  unique() %>% # Remove duplicate rows
+  ungroup # Remove grouping to avoid problems later
+
+str(full_data_with_t_test)
+sum(is.na(full_data_with_t_test))
+```
+
+
+### 8/ How many genes/probesets are left after the following filters?
+
+As each probeset corresponds to 1 row in the data, answers were found by applying the specified filters and using the nrow() function to count the probesets.
+
+**a)** mean_AML > 3 and mean_Control > 3
+
+```{r}
+filter_a = nrow(full_data_with_t_test %>%
+                  filter(mean_AML > 3 & mean_Control > 3))
+
+paste('There are', filter_a, 'probesets remaining after filter a')
+```
+
+**b)** max_AML < 14 or max_Control < 14
+
+```{r}
+filter_b = nrow(full_data_with_t_test %>%
+                  filter(max_AML < 14 | max_Control < 14))
+
+paste('There are', filter_b, 'probesets remaining after filter b')
+```
+
+**c)** Apply a) and b) filters together which is more stringent than applying a) or b) alone
+
+```{r}
+filter_c = nrow(full_data_with_t_test %>%
+                  filter((mean_AML > 3 & mean_Control > 3) &
+                           (max_AML < 14 | max_Control < 14)))
+
+paste('There are', filter_c, 'probesets remaining after filter c')
+```
+
+
+### 9/ Following 8, if we further filter gene/probeset by applying p-value < 0.05 and the absolute value of log2 Fold_change bigger than 1, then how many genes will be left which we call them significantly expressed genes (DEGs)? Among them, how many are up-regulated (Fold_change > 0) and how many are down-regulated (Fold_change < 0)? List top 10 most upregulated DEGs and 10 most down-regulated DEGs including their p-value, log2FC, and mean values in each sample group. 
+
+As the question specifies that this process is following 8, the filter from *8/ c)* was applied before any further analysis.
+
+```{r}
+DEG_data_filter_c = full_data_with_t_test %>%
+  filter((mean_AML > 3 & mean_Control > 3) &
+           (max_AML < 14 | max_Control < 14))
+
+dim(DEG_data_filter_c)
+```
+
+Filters for p-value and absolute log2FC were then applied to identify DEGs. The data was checked for structure and missing values.
+
+```{r}
+DEG_data_filtered = DEG_data_filter_c %>%
+  filter(p_value < 0.05 & abs(Fold_change) > 1)
+
+str(DEG_data_filtered)
+sum(is.na(DEG_data_filtered))
+```
+
+Total DEGs were counted by identifying the number of rows in the DEG table.
+
+```{r}
+paste('There are',
+      nrow(DEG_data_filtered),
+      'differentially expressed genes in the dataset')
+```
+
+The number of DEGs that were up- vs down-regulated was found by filtering the DEGs dataframe for log2 fold changes above and below zero, respectively.
+
+```{r}
+upregulated_DEGs = DEG_data_filtered %>%
+  filter(Fold_change > 0)
+
+# Number upregulated
+paste('There are',
+      nrow(upregulated_DEGs),
+      'upregulated DEGs in the dataset')
+
+downregulated_DEGs = DEG_data_filtered %>%
+  filter(Fold_change < 0)
+
+# Number downregulated
+paste('There are',
+      nrow(downregulated_DEGs),
+      'downregulated DEGs in the dataset')
+```
+
+The ten most up- and down-regulated DEGs (i.e. the probesets with the highest and lowest log2FC, respectively) were identified by applying the slice_max() and slice_min() functions to the Fold_change column of the dataframe. 
+
+```{r}
+# List 10 most upregulated DEGs with p-value, log2FC, and mean values
+top_10_upregulated_DEGs = DEG_data_filtered %>%
+  slice_max(order_by = Fold_change, n = 10) %>%
+  select(ID_REF, p_value, Fold_change, mean_Control, mean_AML)
+
+top_10_upregulated_DEGs
+```
+
+```{r}
+# List 10 most downregulated DEGs with p-value, log2FC, and mean values
+top_10_downregulated_DEGs = DEG_data_filtered %>%
+  slice_min(order_by = Fold_change, n = 10) %>%
+  select(ID_REF, p_value, Fold_change, mean_Control, mean_AML)
+
+top_10_downregulated_DEGs
+```
+
+
+### 10/ If you apply the limma package rather than t-test, then how many DEGs will be discovered by limma? (p-value < 0.05 & abs(log2FC) > 1). How many overlapped DEGs by these two different approaches? Please draw a Venn diagram for demonstration.
+
+The AML_data dataset was prepared for limma analysis by turning the ID_REF column into row names and storing the result as a new dataframe.
+
+```{r}
+AML_data_limma = AML_data
+rownames(AML_data_limma) = AML_data_limma$ID_REF # Apply ID_REF to row names
+AML_data_limma$ID_REF = NULL # Remove old ID_REF column
+```
+
+A limma design matrix was then created defining levels based on the disease status information in the AML_metadata dataframe
+
+```{r}
+#Load limma
+library(limma) 
+
+# Create design matrix based on metadata
+design = model.matrix(~ 0 + AML_metadata$Disease_status)
+colnames(design) = levels(AML_metadata$Disease_status)
+```
+
+The linear model was then applied to the data based on the design matrix. To see the change in gene expression in AML with Control as a baseline, the contrast was defined as AML - Control. Data was checked for structure and missing values.
+
+```{r}
+fit = limma::lmFit(AML_data_limma, design)
+
+contrast.matrix = limma::makeContrasts(AML_vs_Control =
+                                  AML - Control, levels = design)
+
+fit2 = limma::contrasts.fit(fit, contrast.matrix)
+fit2 = limma::eBayes(fit2)
+
+limma_results = limma::topTable(fit2,
+                   coef = 'AML_vs_Control',
+                   adjust.method = 'BH',
+                   sort.by = 'P',
+                   n = Inf)
+
+str(limma_results)
+sum(is.na(limma_results))
+```
+
+After performing the limma test, the results now need to be put through the same filters as the t-test data for a like-with-like comparison. Therefore the limma data need to be joined with the summary statistics dataframe from question 5.
+
+```{r}
+# Create ID_REF column in limma results to join on
+limma_results$ID_REF = rownames(limma_results)
+
+# Join limma_results with summary stat data for further filtering
+full_data_with_limma = limma_results %>%
+  select(ID_REF, logFC, P.Value, adj.P.Val) %>%
+  group_by(ID_REF) %>%
+  full_join(full_data_summary_stats, by = 'ID_REF') %>%
+  unique() %>% # Remove duplicate rows
+  ungroup # Remove grouping to avoid problems later
+
+str(full_data_with_limma)
+sum(is.na(full_data_with_limma))
+```
+
+The following filters are then applied: 
+
+* Mean AML & Mean Control both greater than 3
+* Max AML or Max Control less than 14
+* P-value greater than 0.05
+* Absolute log2 fold change greater than 1
+
+```{r}
+limma_results_filtered = full_data_with_limma %>%
+  filter((mean_AML > 3 & mean_Control > 3) &
+           (max_AML < 14 | max_Control < 14) &
+              P.Value < 0.05 & abs(logFC) > 1)
+
+str(limma_results_filtered)
+sum(is.na(limma_results_filtered))
+```
+
+The number of DEGs discovered by limma is given by the number of rows in this filtered dataframe
+
+```{r}
+paste('There are', nrow(limma_results_filtered), 'DEGs in the dataset')
+```
+
+Limma has also given 626 DEGs; however, we don't know if these are the same ones. To identify the number of genes labelled as DEGs by both methods, an inner join was performed between the limma and t-test tables. As an inner join only includes values found in both dataframes in the output, the number of rows in the output table is the number of DEGs present in both groups (i.e. identified by both methods).
+
+```{r}
+# Identify DEGs in both methods using inner join
+DEGs_limma_and_t_test = DEG_data_filtered %>%
+  inner_join(limma_results_filtered, by = 'ID_REF')
+
+overlapped_gene_count = nrow(DEGs_limma_and_t_test)
+
+paste('There are', overlapped_gene_count, 'overlapped genes')
+```
+
+Although both the t-test and limma identified 626 DEGs, only 620 were present in both, meaning that both methods identified 6 DEG's that the other did not. This can be visualised via a Venn diagram.
+
+```{r}
+# Open package
+library(VennDiagram)
+
+# Create Venn diagram
+grid.newpage()
+grid.draw(venn.diagram(x = list(t_test = DEG_data_filtered$ID_REF,
+                                limmma = limma_results_filtered$ID_REF),
+                        category.names = c('T-test', 'Limma'),
+                        fill = c(alpha('red',0.3),
+                                  alpha('blue',0.3)),
+                       filename = NULL))
+
+```
+
+This diagram shows that both the t-test and limma identified exactly 6 DEGs that the other method did not. If we were interested in identifying what these genes are, we could perform anti-joins to retrieve from each dataframe only the genes not present in the other.
+
+```{r}
+t_test_exclusive_DEGs = DEG_data_filtered %>%
+  anti_join(limma_results_filtered, by = 'ID_REF')
+
+print(t_test_exclusive_DEGs)
+```
+
+```{r}
+limma_exclusive_DEGs = limma_results_filtered %>%
+  anti_join(DEG_data_filtered, by = 'ID_REF')
+
+print(limma_exclusive_DEGs)
+```
+
+Session information:
+
+```{r}
+sessionInfo()
+```
